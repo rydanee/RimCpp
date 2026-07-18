@@ -2,11 +2,13 @@
 #include <raylib.h>
 #include <string>
 #include <vector>
+#include <map>
+#include <filesystem>
 
 #define WIDTH 800
 #define HEIGHT 800
 
-static constexpr int MAP_SIZE = 50;
+static constexpr int MAP_SIZE = 250;
 
 static int targetTickRate = 60;
 static int tickRate = 60;
@@ -15,10 +17,77 @@ static float tpsTimer = 0.0f;
 static float tickTime = 1.0f / targetTickRate;
 static float timeAccumulated = 0.0f;
 
-enum class ItemType { WOOD, STEEL, LAVISHMEATDISH };
+static std::map<std::string, Texture> textures;
+
+bool loadTexture(const std::string &name, const std::string &filePath) {
+  if (textures.find(name) != textures.end()) {
+    std::cout << "[WARN] Texture with name '" << name
+              << "' is already aded.\n";
+    return true;
+  }
+
+  Texture2D tex = LoadTexture(filePath.c_str());
+
+  if (tex.id == 0) {
+    std::cout << "[ERROR] Failed to load texture from path: " << filePath
+              << "\n";
+    return false;
+  }
+
+  GenTextureMipmaps(&tex);
+  //SetTextureFilter(tex, TEXTURE_FILTER_TRILINEAR);
+  SetTextureWrap(tex, TEXTURE_WRAP_CLAMP);
+
+  textures[name] = tex;
+  std::cout << "[INFO] Successfully loaded texture: " << name << " ("
+            << filePath << ")\n";
+  return true;
+}
+
+void loadAllTextures() {
+    namespace fs = std::filesystem;
+    std::string directoryPath = "assets/textures";
+    
+    if (!fs::exists(directoryPath) || !fs::is_directory(directoryPath)) {
+        std::cout << "[ERROR] Resources directory does not exist: " << directoryPath << "\n";
+        return;
+    }
+
+    for (const auto& entry : fs::directory_iterator(directoryPath)) {
+        if (entry.is_regular_file()) {
+            fs::path filePath = entry.path();
+            std::string extension = filePath.extension().string();
+
+            if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".bmp") {
+                
+                std::string textureName = filePath.stem().string();
+                std::string fullPath = filePath.string();
+
+                std::cout << textureName << std::endl;
+                
+                loadTexture(textureName, fullPath);
+            }
+        }
+    }
+    std::cout << "[INFO] Directory batch load complete.\n";
+}
+
+const Texture2D &getTexture(const std::string &name) {
+  auto it = textures.find(name);
+  if (it != textures.end()) {
+    return it->second;
+  }
+
+  std::cout << "[ERROR] Texture '" << name
+            << "' not found in TextureManager!\n";
+
+  static Texture2D emptyTex = {0};
+  return emptyTex;
+}
 
 struct Item {
-  ItemType type;
+  std::string type;
+  
   int amount;  
   float x, y;
 
@@ -27,7 +96,7 @@ struct Item {
   int maxLifeTime;  
 };
 
-Vector2 findBestTile(int startX, int startY, ItemType type, const std::vector<Item>& itemsList) {
+Vector2 findBestTile(int startX, int startY, std::string type, const std::vector<Item>& itemsList) {
     int dx[] = {0,  -1, 1, 0, 0,  -1, -1, 1, 1};
     int dy[] = {0,   0, 0, -1, 1,  -1, 1, -1, 1};
 
@@ -91,7 +160,7 @@ class map {
 
     std::vector<Item> getItems() { return items; }
 
- void addItem(int x, int y, int count, ItemType type) {
+    void addItem(int x, int y, int count, std::string type) {
     if (count <= 0) return;
 
     Vector2 target = findBestTile(x, y, type, items);
@@ -130,7 +199,7 @@ class map {
     newItem.y = targetY;
     newItem.isPerishable = false;
     
-    if (type == ItemType::LAVISHMEATDISH) {
+    if (type == "lavishmeatdish") {
         newItem.isPerishable = true;
         newItem.maxLifeTime = 24 * 10 * 60;
         newItem.currentLifeTime = 0;
@@ -154,16 +223,17 @@ class map {
 
 static int tileSize = 16;
 
-static Color tileColors[] = {
-    {0, 0, 0, 255}, {0, 175, 0, 255}, {175, 0, 0, 255}};
+static map base;
 
-static Color itemColors[] = {
-    BROWN, // WOOD
-    GRAY,   // STEEL
-    MAROON // LAVISHMEATDISH
+static std::string tileTypes[] {
+  "air", "grass",
+      "granite"      
 };
 
-static map base;
+const Texture2D& getTileTexture(int id) {
+  const Texture2D& tex = getTexture(tileTypes[id]);
+return tex;
+}
 
 void drawGrid(Color gridColor) {
   int mapVisualSize = MAP_SIZE * tileSize;
@@ -177,29 +247,61 @@ void drawGrid(Color gridColor) {
   }
 }
 
+Camera2D camera;
+
 void render() {
-  for (int i = 0; i < MAP_SIZE * MAP_SIZE; i++) {
-    int x = i % MAP_SIZE;
-    int y = i / MAP_SIZE;
+  Vector2 topLeftWorld = GetScreenToWorld2D((Vector2){ 0.0f, 0.0f }, camera);
+        Vector2 bottomRightWorld = GetScreenToWorld2D((Vector2){ (float)GetScreenWidth(), (float)GetScreenHeight() }, camera);
 
-    DrawRectangle(x * tileSize, y * tileSize, tileSize, tileSize,
-                  tileColors[base.getTile(x, y)]);
-  }
+        int startX = (int)(topLeftWorld.x / tileSize);
+        int startY = (int)(topLeftWorld.y / tileSize);
+        int endX = (int)(bottomRightWorld.x / tileSize) + 1;
+        int endY = (int)(bottomRightWorld.y / tileSize) + 1;
 
-  for (const auto &item : base.getItems()) {
-    int renderX = item.x * tileSize + (tileSize / 4);
-    int renderY = item.y * tileSize + (tileSize / 4);
+        if (startX < 0) startX = 0;
+        if (startY < 0) startY = 0;
+        if (endX >= MAP_SIZE) endX = MAP_SIZE - 1;
+        if (endY >= MAP_SIZE) endY = MAP_SIZE - 1;
 
-    int itemVisualSize = tileSize / 2;
+        for (int y = startY; y <= endY; y++) {
+            for (int x = startX; x <= endX; x++) {
+                
+                const Texture2D& tex = getTileTexture(base.getTile(x, y));
+                
+                DrawTexturePro(tex,
+                               (Rectangle){0.0f, 0.0f, (float)tex.width, (float)tex.height},
+                               (Rectangle){(float)x * tileSize, (float)y * tileSize,
+                                           (float)tileSize, (float)tileSize},
+                               (Vector2){0.0f, 0.0f}, 0.0f,
+                               WHITE
+                );
+            }
+        }
 
-    Color color = itemColors[static_cast<int>(item.type)];
+        for (const auto &item : base.getItems()) {
+          if (item.x >= startX && item.x <= endX && item.y >= startY &&
+              item.y <= endY) {
+            int renderX = item.x * tileSize + (tileSize / 4);
+            int renderY = item.y * tileSize + (tileSize / 4);
 
-    DrawRectangle(renderX, renderY, itemVisualSize, itemVisualSize, color);
-    if (item.amount != 1) {
-        DrawText(TextFormat("%d", item.amount), renderX, renderY, 4, RAYWHITE);
-    }
-  }
+            int itemVisualSize = tileSize / 2;
+
+            Texture2D tex = getTexture(item.type);
+
+            DrawTexturePro(
+                tex,
+                (Rectangle){0.0f, 0.0f, (float)tex.width, (float)tex.height},
+                (Rectangle){(float)renderX, (float)renderY,
+                            (float)itemVisualSize, (float)itemVisualSize},
+                (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+            if (item.amount != 1) {
+              DrawText(TextFormat("%d", item.amount), renderX, renderY, 4,
+                       RAYWHITE);
+            }
+          }
+   }
 }
+
 
 Camera2D initCamera() {
     Camera2D camera = { 0 };
@@ -256,7 +358,7 @@ void updateCamera(Camera2D &camera, float speed) {
       if (targetTile.x >= 0 && targetTile.x < MAP_SIZE && targetTile.y >= 0 &&
           targetTile.y < MAP_SIZE) {
 
-          base.addItem(targetTile.x, targetTile.y, 500, ItemType::LAVISHMEATDISH);
+          base.addItem(targetTile.x, targetTile.y, 15, "lavishmeatdish");
       }
     }
 
@@ -291,14 +393,15 @@ void updateGameLogic() {
 int main() {
   InitWindow(WIDTH, HEIGHT, "RimCpp");
 
-  Camera2D camera = initCamera();
+  camera = initCamera();
+
+  loadAllTextures();
   
   for (int i = 0; i < MAP_SIZE * MAP_SIZE; i++) {
     int x = i % MAP_SIZE;
     int y = i / MAP_SIZE;
 
-    if (x != MAP_SIZE-1) base.setTile(x, y, 1);
-    else base.setTile(x, y, 0);
+    base.setTile(x, y, 1);
     }
 
   while (!WindowShouldClose()) {
@@ -325,7 +428,7 @@ int main() {
     
     BeginMode2D(camera);
     render();
-    drawGrid((Color){255, 255, 255, 255});
+    //    drawGrid((Color){255, 255, 255, 255});
     EndMode2D();
 
     DrawFPS(10, 10);
