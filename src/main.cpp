@@ -17,6 +17,8 @@ static float tpsTimer = 0.0f;
 static float tickTime = 1.0f / targetTickRate;
 static float timeAccumulated = 0.0f;
 
+static bool redrawCanvas = false;
+
 static std::map<std::string, Texture> textures;
 
 bool loadTexture(const std::string &name, const std::string &filePath) {
@@ -85,6 +87,8 @@ const Texture2D &getTexture(const std::string &name) {
   return emptyTex;
 }
 
+// MAIN DATA TYPES!!
+
 struct Item {
   std::string type;
   
@@ -93,8 +97,27 @@ struct Item {
 
   bool isPerishable;
   int currentLifeTime;
-  int maxLifeTime;  
+  int maxLifeTime;
 };
+
+std::string floorTextures[] = {
+    "grass"
+};
+std::string tileTextures[] = {
+    "void", "grass"
+};
+std::string roofTextures[] = {
+    "grass"
+};
+
+struct Tile {
+  uint8_t floorID = 0;
+  uint8_t tileID = 1;
+  uint8_t roofID = 0;
+  bool isWalkable;
+
+  float movementCost = 1.0f;  
+}; // only 8 BYTES WOWWWW
 
 Vector2 findBestTile(int startX, int startY, std::string type, const std::vector<Item>& itemsList) {
     int dx[] = {0,  -1, 1, 0, 0,  -1, -1, 1, 1};
@@ -143,19 +166,21 @@ class map {
     Vector2 size;
 
   public:
-    int getTile(int x, int y) {
+    Tile& getTile(int x, int y) {
       int ind = y * MAP_SIZE + x;
 
-      if (tiles[ind] != -1) {
+      if (x >= 0 && x < MAP_SIZE && y >= 0 && y < MAP_SIZE) {
         return tiles[ind];
       }
-      return 0;
+
+      static Tile emt = (Tile) {0, 0, 0, false, 0.0f};
+      return emt;
     }
     
-    void setTile(int x, int y, int type) {
+    void setTile(int x, int y, Tile newTile) {
       int ind = y * MAP_SIZE + x;
 
-      tiles[ind] = type;
+      tiles[ind] = newTile;
     }
 
     std::vector<Item> getItems() { return items; }
@@ -217,7 +242,7 @@ class map {
 }  
     
   private:
-    int tiles[MAP_SIZE*MAP_SIZE];
+    Tile tiles[MAP_SIZE*MAP_SIZE];
     std::vector<Item> items;
 };
 
@@ -225,14 +250,19 @@ static int tileSize = 16;
 
 static map base;
 
-static std::string tileTypes[] {
-  "air", "grass",
-      "granite"      
-};
-
-const Texture2D& getTileTexture(int id) {
-  const Texture2D& tex = getTexture(tileTypes[id]);
+const Texture2D& getFloorTexture(int id) {
+  const Texture2D& tex = getTexture(floorTextures[id]);
 return tex;
+}
+
+const Texture2D &getTileTexture(int id) {
+  const Texture2D &tex = getTexture(tileTextures[id]);
+  return tex;
+}
+
+const Texture2D &getRoofTexture(int id) {
+  const Texture2D &tex = getTexture(roofTextures[id]);
+  return tex;
 }
 
 void drawGrid(Color gridColor) {
@@ -249,38 +279,59 @@ void drawGrid(Color gridColor) {
 
 Camera2D camera;
 
-void render() {
-  Vector2 topLeftWorld = GetScreenToWorld2D((Vector2){ 0.0f, 0.0f }, camera);
-        Vector2 bottomRightWorld = GetScreenToWorld2D((Vector2){ (float)GetScreenWidth(), (float)GetScreenHeight() }, camera);
+static RenderTexture2D canvas;
+static bool isCanvasReady = false;
 
-        int startX = (int)(topLeftWorld.x / tileSize);
-        int startY = (int)(topLeftWorld.y / tileSize);
-        int endX = (int)(bottomRightWorld.x / tileSize) + 1;
-        int endY = (int)(bottomRightWorld.y / tileSize) + 1;
+void initCanvas() {
+    canvas = LoadRenderTexture(MAP_SIZE * tileSize, MAP_SIZE * tileSize);
+    isCanvasReady = true;
+}
 
-        if (startX < 0) startX = 0;
-        if (startY < 0) startY = 0;
-        if (endX >= MAP_SIZE) endX = MAP_SIZE - 1;
-        if (endY >= MAP_SIZE) endY = MAP_SIZE - 1;
+void loadToRenderTexture() {
+  if (!isCanvasReady)
+    return;  
+  
+  BeginTextureMode(canvas);
+  ClearBackground(BLACK);
 
-        for (int y = startY; y <= endY; y++) {
-            for (int x = startX; x <= endX; x++) {
-                
-                const Texture2D& tex = getTileTexture(base.getTile(x, y));
-                
-                DrawTexturePro(tex,
-                               (Rectangle){0.0f, 0.0f, (float)tex.width, (float)tex.height},
-                               (Rectangle){(float)x * tileSize, (float)y * tileSize,
-                                           (float)tileSize, (float)tileSize},
-                               (Vector2){0.0f, 0.0f}, 0.0f,
-                               WHITE
-                );
-            }
+        for (int y = 0; y <= MAP_SIZE; y++) {
+            for (int x = 0; x <= MAP_SIZE; x++) {
+                const Tile tile = base.getTile(x, y);
+ 
+                const Texture2D &floortex = getFloorTexture(tile.floorID);
+                DrawTexturePro(floortex,
+                               (Rectangle){0.0f, 0.0f, (float)floortex.width,
+                                           (float)floortex.height},
+                               (Rectangle){(float)x * tileSize,
+                                           (float)y * tileSize, (float)tileSize,
+                                           (float)tileSize},
+                               (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+
+                if (tile.tileID != 0) {
+                    const Texture2D &tiletex = getTileTexture(tile.tileID);
+                    DrawTexturePro(
+                        tiletex,
+                        (Rectangle){0.0f, 0.0f, (float)tiletex.width,
+                                    (float)tiletex.height},
+                        (Rectangle){(float)x * tileSize, (float)y * tileSize,
+                                    (float)tileSize, (float)tileSize},
+                        (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+                }
+
+                if (tile.roofID != 0) {
+                  const Texture2D& rooftex = getRoofTexture(tile.roofID);
+                  DrawTexturePro(rooftex,
+                                 (Rectangle){0.0f, 0.0f, (float)rooftex.width,
+                                             (float)rooftex.height},
+                                 (Rectangle){(float)x * tileSize,
+                                             (float)y * tileSize,
+                                             (float)tileSize, (float)tileSize},
+                                 (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+                }
+            }            
         }
 
         for (const auto &item : base.getItems()) {
-          if (item.x >= startX && item.x <= endX && item.y >= startY &&
-              item.y <= endY) {
             int renderX = item.x * tileSize + (tileSize / 4);
             int renderY = item.y * tileSize + (tileSize / 4);
 
@@ -297,9 +348,20 @@ void render() {
             if (item.amount != 1) {
               DrawText(TextFormat("%d", item.amount), renderX, renderY, 4,
                        RAYWHITE);
-            }
           }
-   }
+        }
+
+        EndTextureMode();        
+}
+
+void render() {
+  if (!isCanvasReady)
+    return;  
+  
+  DrawTextureRec(canvas.texture,
+                 (Rectangle){0, 0, (float)canvas.texture.width,
+                             (float)-canvas.texture.height},
+                 (Vector2){0, 0}, WHITE);
 }
 
 
@@ -338,28 +400,23 @@ void updateCamera(Camera2D &camera, float speed) {
     float dt = GetFrameTime(); 
 
     float currentSpeed = speed * dt;
-    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D))
-        camera.target.x += currentSpeed * (4.1 - targetZoom);
-    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))
-        camera.target.x -= currentSpeed * (4.1 - targetZoom);
-    if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S))
-        camera.target.y += currentSpeed * (4.1 - targetZoom);
-    if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
-        camera.target.y -= currentSpeed * (4.1 - targetZoom);
-    if (IsKeyPressed(KEY_ONE))
-        changeTPS(60);
-    if (IsKeyPressed(KEY_TWO))
-      changeTPS(180);
-    if (IsKeyPressed(KEY_THREE))
-      changeTPS(360);
+    
+    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) camera.target.x += currentSpeed * (4.1 - targetZoom);
+    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))  camera.target.x -= currentSpeed * (4.1 - targetZoom);
+    if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S))  camera.target.y += currentSpeed * (4.1 - targetZoom);
+    if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))    camera.target.y -= currentSpeed * (4.1 - targetZoom);
+
+    if (IsKeyPressed(KEY_ONE))   changeTPS(60);
+    if (IsKeyPressed(KEY_TWO))   changeTPS(180);
+    if (IsKeyPressed(KEY_THREE)) changeTPS(360);
+
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      Vector2 targetTile = getTileUnderCursor(camera);
-
-      if (targetTile.x >= 0 && targetTile.x < MAP_SIZE && targetTile.y >= 0 &&
-          targetTile.y < MAP_SIZE) {
-
-          base.addItem(targetTile.x, targetTile.y, 15, "lavishmeatdish");
-      }
+        Vector2 targetTile = getTileUnderCursor(camera);
+        
+        if (targetTile.x >= 0 && targetTile.x < MAP_SIZE && targetTile.y >= 0 && targetTile.y < MAP_SIZE) {
+            base.addItem(targetTile.x, targetTile.y, 15, "lavishmeatdish");
+            redrawCanvas = true;
+        }
     }
 
     float wheel = GetMouseWheelMove();
@@ -368,7 +425,7 @@ void updateCamera(Camera2D &camera, float speed) {
         
         targetZoom += wheel * 0.15f;
         if (targetZoom < 0.1f) targetZoom = 0.1f;
-        if (targetZoom > 4.0f) targetZoom = 4.0f;
+        if (targetZoom > 3.5f) targetZoom = 3.5f;
 
         camera.offset = GetMousePosition();
         camera.target = mouseWorldPos;
@@ -384,6 +441,8 @@ void updateCamera(Camera2D &camera, float speed) {
         camera.target.x += (mouseWorldPosBefore.x - mouseWorldPosAfter.x);
         camera.target.y += (mouseWorldPosBefore.y - mouseWorldPosAfter.y);
     }
+
+    
 }
 
 void updateGameLogic() {
@@ -392,7 +451,8 @@ void updateGameLogic() {
 
 int main() {
   InitWindow(WIDTH, HEIGHT, "RimCpp");
-
+  InitAudioDevice();
+  
   camera = initCamera();
 
   loadAllTextures();
@@ -401,10 +461,15 @@ int main() {
     int x = i % MAP_SIZE;
     int y = i / MAP_SIZE;
 
-    base.setTile(x, y, 1);
+    base.setTile(x, y, (Tile) {0, 1, 0, true, 1.0f});
     }
 
+  initCanvas();
+  loadToRenderTexture();
+  
   while (!WindowShouldClose()) {
+    redrawCanvas = false;    
+    
     timeAccumulated += GetFrameTime();
     tpsTimer += GetFrameTime();
     
@@ -425,7 +490,11 @@ int main() {
       tickCounter = 0;
       tpsTimer -= 1.0f;
     }
-    
+
+    if (redrawCanvas) {
+      loadToRenderTexture();
+    }
+
     BeginMode2D(camera);
     render();
     //    drawGrid((Color){255, 255, 255, 255});
